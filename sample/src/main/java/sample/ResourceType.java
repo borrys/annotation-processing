@@ -1,7 +1,9 @@
 package sample;
 
-import annotationprocessing.CompileLog;
+import annotationprocessing.ToStringCompanion;
 
-@CompileLog
+@ToStringCompanion
 public enum ResourceType {
+  PLAIN_TEXT,
+  PORTABLE_NETWORK_GRAPHICS
 }
