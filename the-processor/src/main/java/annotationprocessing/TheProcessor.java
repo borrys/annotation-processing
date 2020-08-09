@@ -1,10 +1,11 @@
 package annotationprocessing;
 
+import com.squareup.javapoet.*;
+
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.RoundEnvironment;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.*;
-import javax.tools.JavaFileObject;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
@@ -16,6 +17,7 @@ import java.util.stream.Collectors;
 import static java.text.MessageFormat.format;
 import static java.util.stream.Collectors.toList;
 import static java.util.stream.Collectors.toMap;
+import static javax.lang.model.element.Modifier.PUBLIC;
 import static javax.tools.Diagnostic.Kind.ERROR;
 
 public class TheProcessor extends AbstractProcessor {
@@ -41,36 +43,19 @@ public class TheProcessor extends AbstractProcessor {
 
     Set<? extends Element> enums = roundEnv.getElementsAnnotatedWith(ToStringCompanion.class);
     enums.forEach(
-        e -> {
-          Name enumType = e.getSimpleName();
-          PackageElement pack = processingEnv.getElementUtils().getPackageOf(e);
+        element -> {
+          Name enumType = element.getSimpleName();
+          PackageElement pack = processingEnv.getElementUtils().getPackageOf(element);
 
-          Map<String, String> enumStrings = processingEnv.getElementUtils().getAllMembers((TypeElement) e)
-              .stream()
-              .filter(m -> m.getKind() == ElementKind.ENUM_CONSTANT)
-              .map(m -> m.getSimpleName().toString())
-              .collect(toMap(Function.identity(), toCamelCase()));
-          String keyValues = enumStrings.entrySet().stream()
-              .map(entry -> format("{0}.{1}, \"{2}\"", enumType, entry.getKey(), entry.getValue()))
-              .collect(Collectors.joining(",\n  "));
+          var companionClass = TypeSpec.classBuilder(enumType + "Companion")
+              .addModifiers(PUBLIC)
+              .addField(mappingField(pack, (TypeElement) element))
+              .addMethod(toStringMethod(pack, (TypeElement) element))
+              .build();
+          var file = JavaFile.builder(pack.toString(), companionClass).build();
 
-          String source = new StringBuilder()
-              .append("package " + pack + ";\n")
-              .append("import java.util.Map;\n")
-              .append("public class " + enumType + "Companion {\n")
-              .append("  private static final Map<" + enumType + ",String> mapping = Map.of(\n")
-              .append(keyValues)
-              .append("  );\n")
-              .append("  public static String toString(" + enumType + " val) {\n")
-              .append("    return mapping.get(val);\n")
-              .append("  }\n")
-              .append("}\n")
-              .toString();
           try {
-            JavaFileObject sourceFile = processingEnv.getFiler().createSourceFile(pack + "." + enumType + "Companion");
-            try (var writer = sourceFile.openWriter()) {
-              writer.append(source);
-            }
+            file.writeTo(processingEnv.getFiler());
           } catch (IOException ex) {
             error(ex.getMessage());
           }
@@ -78,6 +63,40 @@ public class TheProcessor extends AbstractProcessor {
     );
 
     return true;
+  }
+
+  private FieldSpec mappingField(PackageElement pack, TypeElement e) {
+    Map<String, String> enumStrings = processingEnv.getElementUtils().getAllMembers(e)
+        .stream()
+        .filter(m -> m.getKind() == ElementKind.ENUM_CONSTANT)
+        .map(m -> m.getSimpleName().toString())
+        .collect(toMap(Function.identity(), toCamelCase()));
+    String keyValues = enumStrings.entrySet().stream()
+        .map(entry -> format("{0}.{1}, \"{2}\"", e.getSimpleName(), entry.getKey(), entry.getValue()))
+        .collect(Collectors.joining(",\n  "));
+
+    ParameterizedTypeName fieldType = ParameterizedTypeName.get(
+        ClassName.get(Map.class),
+        ClassName.get(pack.toString(), e.getSimpleName().toString()),
+        ClassName.get(String.class)
+    );
+    return FieldSpec.builder(fieldType, "mapping",
+        Modifier.PRIVATE,
+        Modifier.STATIC,
+        Modifier.FINAL
+    )
+        .initializer("Map.of($L)", keyValues)
+        .build();
+  }
+
+  private MethodSpec toStringMethod(PackageElement pack, TypeElement e) {
+    return MethodSpec.methodBuilder("toString")
+        .addModifiers(Modifier.PUBLIC)
+        .addModifiers(Modifier.STATIC)
+        .addParameter(ClassName.get(pack.toString(), e.getSimpleName().toString()), "val")
+        .returns(ClassName.get(String.class))
+        .addCode("return mapping.get(val);")
+        .build();
   }
 
   private Function<String, String> toCamelCase() {
