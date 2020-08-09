@@ -3,8 +3,10 @@ package annotationprocessing;
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.RoundEnvironment;
 import javax.lang.model.SourceVersion;
+import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.TypeElement;
 import javax.tools.Diagnostic;
+import java.text.MessageFormat;
 import java.util.Set;
 
 public class TheProcessor extends AbstractProcessor {
@@ -19,10 +21,13 @@ public class TheProcessor extends AbstractProcessor {
   }
 
   public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
-    annotations.stream()
-        .flatMap(a -> roundEnv.getElementsAnnotatedWith(a).stream())
-        .map(e -> "@CompileLog found: " + e)
-        .forEach(msg -> processingEnv.getMessager().printMessage(Diagnostic.Kind.NOTE, msg));
+    roundEnv.getElementsAnnotatedWith(CompileLog.class)
+        .stream()
+        .filter(e -> e.getKind() != ElementKind.ENUM)
+        .map(element -> MessageFormat.format("{0} only allowed on enums but found on {1} {2}",
+            CompileLog.class.getSimpleName(),
+            element.getKind(), element))
+        .forEach(msg -> processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR, msg));
     return true;
   }
 }
