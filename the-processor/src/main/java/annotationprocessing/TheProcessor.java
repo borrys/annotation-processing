@@ -7,13 +7,21 @@ import javax.lang.model.element.*;
 import javax.tools.JavaFileObject;
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 import static java.text.MessageFormat.format;
 import static java.util.stream.Collectors.toList;
+import static java.util.stream.Collectors.toMap;
 import static javax.tools.Diagnostic.Kind.ERROR;
 
 public class TheProcessor extends AbstractProcessor {
+
+  private final static Pattern UNDERSCORE_PATTERN = Pattern.compile("_([a-z])");
+
   @Override
   public Set<String> getSupportedAnnotationTypes() {
     return Set.of(ToStringCompanion.class.getCanonicalName());
@@ -34,23 +42,35 @@ public class TheProcessor extends AbstractProcessor {
     Set<? extends Element> enums = roundEnv.getElementsAnnotatedWith(ToStringCompanion.class);
     enums.forEach(
         e -> {
-          Name name = e.getSimpleName();
+          Name enumType = e.getSimpleName();
           PackageElement pack = processingEnv.getElementUtils().getPackageOf(e);
-          try {
-            JavaFileObject sourceFile = processingEnv.getFiler().createSourceFile(pack + "." + name + "Companion");
-            try (var writer = sourceFile.openWriter()) {
-              writer
-                  .append("package " + pack + ";\n")
-                  .append("import java.util.regex.*;\n")
-                  .append("public class " + name + "Companion {\n")
-                  .append("  private static final Pattern UNDERSCORE_PATTERN = Pattern.compile(\"_([a-z])\");\n")
-                  .append("  public static String toString(" + name + " val) {\n")
-                  .append("    Matcher matcher = UNDERSCORE_PATTERN.matcher(val.name().toLowerCase());\n")
-                  .append("    return matcher.replaceAll(r -> r.group(1).toUpperCase());\n")
-                  .append("  }\n")
-                  .append("}\n");
-            }
 
+          Map<String, String> enumStrings = processingEnv.getElementUtils().getAllMembers((TypeElement) e)
+              .stream()
+              .filter(m -> m.getKind() == ElementKind.ENUM_CONSTANT)
+              .map(m -> m.getSimpleName().toString())
+              .collect(toMap(Function.identity(), toCamelCase()));
+          String keyValues = enumStrings.entrySet().stream()
+              .map(entry -> format("{0}.{1}, \"{2}\"", enumType, entry.getKey(), entry.getValue()))
+              .collect(Collectors.joining(",\n  "));
+
+          String source = new StringBuilder()
+              .append("package " + pack + ";\n")
+              .append("import java.util.Map;\n")
+              .append("public class " + enumType + "Companion {\n")
+              .append("  private static final Map<" + enumType + ",String> mapping = Map.of(\n")
+              .append(keyValues)
+              .append("  );\n")
+              .append("  public static String toString(" + enumType + " val) {\n")
+              .append("    return mapping.get(val);\n")
+              .append("  }\n")
+              .append("}\n")
+              .toString();
+          try {
+            JavaFileObject sourceFile = processingEnv.getFiler().createSourceFile(pack + "." + enumType + "Companion");
+            try (var writer = sourceFile.openWriter()) {
+              writer.append(source);
+            }
           } catch (IOException ex) {
             error(ex.getMessage());
           }
@@ -58,6 +78,10 @@ public class TheProcessor extends AbstractProcessor {
     );
 
     return true;
+  }
+
+  private Function<String, String> toCamelCase() {
+    return string -> UNDERSCORE_PATTERN.matcher(string.toLowerCase()).replaceAll(m -> m.group(1).toUpperCase());
   }
 
   private List<? extends Element> getAnnotatedNonEnums(RoundEnvironment roundEnv) {
